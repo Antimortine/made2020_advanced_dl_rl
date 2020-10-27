@@ -1,0 +1,2 @@
+Richard S. Sutton, Andrew G. Barto.  Reinforcement Learning: An Introduction. MIT Press, Cambridge, MA, 2018.
+Link: http://www.incompleteideas.net/book/the-book.html

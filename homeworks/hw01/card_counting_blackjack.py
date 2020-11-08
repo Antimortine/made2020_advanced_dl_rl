@@ -37,17 +37,21 @@ class CardCountingBlackjackEnv(gym.Env):
     """Modification of BlackjackEnv which implements card counting and doubling.
     It uses Uston APC counting strategy with side count for Aces."""
 
-    def __init__(self, num_decks: int, reshuffle_at: int, natural: bool):
+    def __init__(self,
+                 num_decks: int,
+                 reshuffle_at: int,
+                 natural: bool,
+                 counting_strategy: str = 'uston_apc',
+                 count_aces: bool = True):
         assert num_decks >= 1 and isinstance(num_decks, int)
-        self.action_space = spaces.Discrete(3)
-        self.observation_space = spaces.Tuple((
-            spaces.Discrete(32),  # Player's sum
-            spaces.Discrete(11),  # Dealer's open card
-            spaces.Discrete(2),  # Does player have usable ace?
-            spaces.Discrete(2),  # Is natural blackjack?
-            # Running Uston APC count
-            spaces.Box(low=-3 * 52 * num_decks, high=3 * 52 * num_decks, shape=(1,), dtype=np.int32),
-            spaces.Discrete(num_decks * 4 + 1)))  # Number of aces out
+        self.num_decks = num_decks
+        assert counting_strategy in [
+            'uston_apc',  # https://www.qfit.com/cardcounting/Uston-APC/
+            'reko']  # https://www.qfit.com/cardcounting/REKO/
+        self.counting_strategy = counting_strategy
+        self.count_aces = count_aces
+        self.action_space = spaces.Discrete(3)  # stick, hit, double
+        self.observation_space = self._get_observation_space()
         self.seed()
 
         self.deck = single_deck * num_decks
@@ -63,6 +67,37 @@ class CardCountingBlackjackEnv(gym.Env):
         self.natural = natural
         # self.reset()
 
+    def _get_observation_space(self):
+        sum_space = spaces.Discrete(32)  # Player's sum
+        dealers_card_space = spaces.Discrete(11)  # Dealer's open card
+        usable_ace_space = spaces.Discrete(2)  # Does player have usable ace?
+        if self.counting_strategy == 'uston_apc':
+            count_space = spaces.Box(low=-52 * self.num_decks,
+                                     high=52 * self.num_decks,
+                                     shape=(1,),
+                                     dtype=np.int32)
+        elif self.counting_strategy == 'reko':
+            count_space = spaces.Box(low=-20 * self.num_decks,
+                                     high=24 * self.num_decks,
+                                     shape=(1,),
+                                     dtype=np.int32)
+        else:
+            raise NotImplementedError
+        aces_space = spaces.Discrete(self.num_decks * 4 + 1)  # Number of aces out
+        if self.count_aces:
+            return spaces.Tuple((
+                sum_space,
+                dealers_card_space,
+                usable_ace_space,
+                count_space,
+                aces_space))
+        else:
+            return spaces.Tuple((
+                sum_space,
+                dealers_card_space,
+                usable_ace_space,
+                count_space))
+
     def seed(self, seed=None):
         self.np_random, seed = seeding.np_random(seed)
         return [seed]
@@ -74,20 +109,34 @@ class CardCountingBlackjackEnv(gym.Env):
         self.aces_count = 0
 
     def update_counts(self, card):
-        if card == 1:
-            self.aces_count += 1
-        elif card in [2, 8]:
-            self.running_count += 1
-        elif card in [3, 4, 6, 7]:
-            self.running_count += 2
-        elif card == 5:
-            self.running_count += 5
-        elif card == 9:
-            self.running_count -= 1
-        elif card == 10:
-            self.running_count -= 3
+        if self.counting_strategy == 'uston_apc':
+            if card == 1:
+                self.aces_count += 1
+            elif card in [2, 8]:
+                self.running_count += 1
+            elif card in [3, 4, 6, 7]:
+                self.running_count += 2
+            elif card == 5:
+                self.running_count += 5
+            elif card == 9:
+                self.running_count -= 1
+            elif card == 10:
+                self.running_count -= 3
+            else:
+                raise ValueError
+        elif self.counting_strategy == 'reko':
+            if card == 1:
+                self.aces_count += 1
+            if card in [1, 10]:
+                self.running_count -= 1
+            elif card in [2, 3, 4, 5, 6, 7]:
+                self.running_count += 1
+            elif card in [8, 9]:
+                pass
+            else:
+                raise ValueError
         else:
-            raise Exception()
+            raise NotImplementedError
 
     def draw_card(self, hidden: bool = False):
         card = self.deck[self.next_card_idx]
@@ -132,14 +181,21 @@ class CardCountingBlackjackEnv(gym.Env):
 
     def _get_obs(self):
         player_sum = sum_hand(self.player)
-        state = (
-            player_sum,  # Player's sum
-            self.dealer[0],  # Dealer's open card
-            usable_ace(self.player),  # Does player have usable ace?
-            self.running_count,  # Running Uston APC count
-            self.aces_count  # Number of aces out
-        )
-        return state
+        if self.count_aces:
+            return (
+                player_sum,  # Player's sum
+                self.dealer[0],  # Dealer's open card
+                usable_ace(self.player),  # Does player have usable ace?
+                self.running_count,  # Running count
+                self.aces_count  # Number of aces out
+            )
+        else:
+            return (
+                player_sum,  # Player's sum
+                self.dealer[0],  # Dealer's open card
+                usable_ace(self.player),  # Does player have usable ace?
+                self.running_count,  # Running count
+            )
 
     def reset(self):
         if self.next_card_idx + 1 <= self.reshuffle_at:
